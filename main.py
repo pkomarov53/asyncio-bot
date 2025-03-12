@@ -10,7 +10,7 @@ from aiogram.filters import Command
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Bot token (replace with your actual token)
-TOKEN = ""
+TOKEN = "7698217701:AAFDiwGxJ1Mrzx10UV8sMn43QxayoUgwA8g"
 
 # Initialize bot and dispatcher
 bot = Bot(token=TOKEN)
@@ -31,9 +31,19 @@ def init_db():
             nickname TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            lecture TEXT,
+            direction TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(telegram_id)
+        )
+    """)
     conn.commit()
     conn.close()
     logging.info("Database initialized successfully.")
+
 
 # Keyboard setup
 main_menu = ReplyKeyboardMarkup(
@@ -87,7 +97,7 @@ async def send_book_link(message: types.Message):
         with open(book_file, "r") as file:
             book_link = file.read().strip()
         logging.info(f"User {message.from_user.id} requested book: {message.text}")
-        await message.answer(f"Вот ссылка на литературу: {book_link}")
+        await message.answer(f"Вот ссылка на литературу: https://{book_link}")
 
 # Useful Information Menu
 def get_info_buttons():
@@ -112,13 +122,81 @@ async def send_useful_info(message: types.Message):
     pdf_file = os.path.join(info_folder, f"{message.text}.pdf")
 
     if os.path.exists(txt_file):
-        with open(txt_file, "r") as file:
+        with open(txt_file, "r", encoding="utf-8") as file:
             info_text = file.read().strip()
         logging.info(f"User {message.from_user.id} requested info: {message.text}")
         await message.answer(info_text)
     elif os.path.exists(pdf_file):
         logging.info(f"User {message.from_user.id} requested PDF: {message.text}")
         await message.answer_document(FSInputFile(pdf_file))
+
+# Available Lectures Menu
+def get_lecture_directions():
+    lections_folder = "lections"
+    os.makedirs(lections_folder, exist_ok=True)
+
+    directions = [f.replace(".txt", "") for f in os.listdir(lections_folder) if f.endswith(".txt")]
+    keyboard = [[KeyboardButton(text=direction)] for direction in directions]
+    keyboard.append([KeyboardButton(text="🔙 Возврат в меню")])
+
+    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=keyboard)
+
+
+@router.message(lambda message: message.text == "📅 Доступные лекции")
+async def available_lectures_menu(message: types.Message):
+    logging.info(f"User {message.from_user.id} accessed Available Lectures menu.")
+    await message.answer("Выбери направление лекций:", reply_markup=get_lecture_directions())
+
+
+@router.message(
+    lambda message: message.text in [f.replace(".txt", "") for f in os.listdir("lections") if f.endswith(".txt")])
+async def show_lectures(message: types.Message):
+    direction = message.text
+    lections_folder = "lections"
+    lection_file = os.path.join(lections_folder, f"{direction}.txt")
+
+    if os.path.exists(lection_file):
+        with open(lection_file, "r", encoding="utf-8") as file:
+            lectures = [line.strip() for line in file.readlines() if line.strip()]
+
+        conn = sqlite3.connect("db/bot_database.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT lecture FROM bookings WHERE direction = ?", (direction,))
+        booked_lectures = {row[0] for row in cursor.fetchall()}
+        conn.close()
+
+        available_lectures = [lecture for lecture in lectures if lecture not in booked_lectures]
+
+        if not available_lectures:
+            await message.answer("Нет доступных лекций в этом направлении.")
+            return
+
+        lecture_list = "\n".join([f"📌 {i + 1}. {lecture}\n" for i, lecture in enumerate(available_lectures)])
+
+        await message.answer(
+            f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}\nВведите номер лекции, чтобы забронировать.",
+            parse_mode="Markdown")
+
+        @router.message(lambda msg: msg.text.isdigit())
+        async def book_lecture(msg: types.Message):
+            lecture_number = int(msg.text)
+            if 1 <= lecture_number <= len(available_lectures):
+                selected_lecture = available_lectures[lecture_number - 1]
+                user_id = msg.from_user.id
+
+                conn = sqlite3.connect("db/bot_database.db")
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO bookings (user_id, lecture, direction) VALUES (?, ?, ?)",
+                               (user_id, selected_lecture, direction))
+                conn.commit()
+                conn.close()
+
+                logging.info(f"User {user_id} booked lecture: {selected_lecture} ({direction})")
+                await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
+            else:
+                await msg.answer("⚠️ Некорректный номер лекции. Попробуйте снова.")
+    else:
+        await message.answer("❌ Ошибка: направление не найдено.")
 
 @router.message(lambda message: message.text == "🔙 Возврат в меню")
 async def return_to_menu(message: types.Message):
