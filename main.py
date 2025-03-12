@@ -3,8 +3,15 @@ import sqlite3
 import os
 import logging
 from aiogram import Bot, Dispatcher, types, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.filters import Command
+
+
+class BookingState(StatesGroup):
+    waiting_for_direction = State()  # Состояние ожидания направления
+    waiting_for_lecture = State()  # Состояние ожидания номера лекции
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -143,17 +150,26 @@ def get_lecture_directions():
 
 
 @router.message(lambda message: message.text == "📅 Доступные лекции")
-async def available_lectures_menu(message: types.Message):
+async def available_lectures_menu(message: types.Message, state: FSMContext):
     logging.info(f"User {message.from_user.id} accessed Available Lectures menu.")
     await message.answer("Выбери направление лекций:", reply_markup=get_lecture_directions())
+    await BookingState.waiting_for_direction.set()  # Сохраняем состояние ожидания выбора направления
 
 
-@router.message(
-    lambda message: message.text in [f.replace(".txt", "") for f in os.listdir("lections") if f.endswith(".txt")])
-async def show_lectures(message: types.Message):
+@router.message(lambda message: message.text == "📅 Доступные лекции")
+async def available_lectures_menu(message: types.Message, state: FSMContext):
+    logging.info(f"User {message.from_user.id} accessed Available Lectures menu.")
+    await message.answer("Выбери направление лекций:", reply_markup=get_lecture_directions())
+    await state.set_state(BookingState.waiting_for_direction)  # Сохраняем состояние ожидания выбора направления
+
+@router.message(lambda message: message.text in [f.replace(".txt", "") for f in os.listdir("lections") if f.endswith(".txt")])
+async def show_lectures(message: types.Message, state: FSMContext):
     direction = message.text
     lections_folder = "lections"
     lection_file = os.path.join(lections_folder, f"{direction}.txt")
+
+    # Логируем путь к открываемому файлу
+    logging.info(f"Opening file for direction '{direction}': {lection_file}")
 
     if os.path.exists(lection_file):
         with open(lection_file, "r", encoding="utf-8") as file:
@@ -165,38 +181,72 @@ async def show_lectures(message: types.Message):
         booked_lectures = {row[0] for row in cursor.fetchall()}
         conn.close()
 
-        available_lectures = [lecture for lecture in lectures if lecture not in booked_lectures]
+        # Сохраняем направление для дальнейшего использования в состоянии
+        await state.update_data(direction=direction)
 
-        if not available_lectures:
-            await message.answer("Нет доступных лекций в этом направлении.")
-            return
+        # Формируем список лекций для отображения
+        lecture_list = ""
+        for i, lecture in enumerate(lectures):
+            if lecture in booked_lectures:
+                lecture_list += f"❌ {i + 1}. {lecture}\n"  # Если лекция забронирована
+            else:
+                lecture_list += f"📌 {i + 1}. {lecture}\n"  # Если лекция доступна
 
-        lecture_list = "\n".join([f"📌 {i + 1}. {lecture}\n" for i, lecture in enumerate(available_lectures)])
-
+        # Отправляем сообщение с лекциями
         await message.answer(
             f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}\nВведите номер лекции, чтобы забронировать.",
             parse_mode="Markdown")
 
-        @router.message(lambda msg: msg.text.isdigit())
-        async def book_lecture(msg: types.Message):
-            lecture_number = int(msg.text)
-            if 1 <= lecture_number <= len(available_lectures):
-                selected_lecture = available_lectures[lecture_number - 1]
-                user_id = msg.from_user.id
+        # Переводим в состояние ожидания номера лекции
+        await state.set_state(BookingState.waiting_for_lecture)
 
+    else:
+        await message.answer(f"❌ Направление '{direction}' не найдено.")
+
+
+@router.message(lambda msg: msg.text.isdigit())
+async def book_lecture(msg: types.Message, state: FSMContext):
+    user_data = await state.get_data()  # Получаем данные состояния
+    direction = user_data.get('direction')  # Получаем направление из состояния
+
+    if direction:
+        lections_folder = "lections"
+        lection_file = os.path.join(lections_folder, f"{direction}.txt")
+
+        if os.path.exists(lection_file):
+            with open(lection_file, "r", encoding="utf-8") as file:
+                lectures = [line.strip() for line in file.readlines() if line.strip()]
+
+            lecture_number = int(msg.text)
+            if 1 <= lecture_number <= len(lectures):
+                selected_lecture = lectures[lecture_number - 1]
+
+                # Проверяем, не забронирована ли лекция
                 conn = sqlite3.connect("db/bot_database.db")
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO bookings (user_id, lecture, direction) VALUES (?, ?, ?)",
-                               (user_id, selected_lecture, direction))
-                conn.commit()
-                conn.close()
+                cursor.execute("SELECT lecture FROM bookings WHERE direction = ? AND lecture = ?",
+                               (direction, selected_lecture))
+                if cursor.fetchone():  # Лекция уже забронирована
+                    await msg.answer(f"⚠️ Лекция *'{selected_lecture}'* уже забронирована.")
+                else:
+                    # Бронирование лекции
+                    cursor.execute("INSERT INTO bookings (user_id, lecture, direction) VALUES (?, ?, ?)",
+                                   (msg.from_user.id, selected_lecture, direction))
+                    conn.commit()
+                    conn.close()
 
-                logging.info(f"User {user_id} booked lecture: {selected_lecture} ({direction})")
-                await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
+                    logging.info(f"User {msg.from_user.id} booked lecture: {selected_lecture} ({direction})")
+                    await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
+
+                    # Очищаем состояние после успешного бронирования
+                    await state.finish()
+
             else:
                 await msg.answer("⚠️ Некорректный номер лекции. Попробуйте снова.")
+        else:
+            await msg.answer("❌ Ошибка: направление не найдено.")
     else:
-        await message.answer("❌ Ошибка: направление не найдено.")
+        await msg.answer("❌ Ошибка: не выбрано направление для бронирования.")
 
 @router.message(lambda message: message.text == "🔙 Возврат в меню")
 async def return_to_menu(message: types.Message):
