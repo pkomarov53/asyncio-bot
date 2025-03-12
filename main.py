@@ -17,7 +17,7 @@ class BookingState(StatesGroup):
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Bot token (replace with your actual token)
-TOKEN = "7698217701:AAFDiwGxJ1Mrzx10UV8sMn43QxayoUgwA8g"
+TOKEN = ""
 
 # Initialize bot and dispatcher
 bot = Bot(token=TOKEN)
