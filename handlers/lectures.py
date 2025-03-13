@@ -2,7 +2,10 @@ import os
 import logging
 import aiosqlite
 from aiogram import types, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+
+from config import main_menu
 from states.booking_state import BookingState
 from utils.file_utils import get_file_base_names, get_buttons, read_lines_async
 
@@ -87,3 +90,13 @@ async def book_lecture(msg: types.Message, state: FSMContext) -> None:
         logging.info(f"User {msg.from_user.id} booked lecture: {selected_lecture} ({direction})")
         await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
         await state.clear()
+
+@router.message(StateFilter(None), lambda message: message.text == "🔙 Возврат в меню")
+@router.message(lambda message: message.text == "🔙 Возврат в меню")  # В aiogram 3.x лучше так
+async def return_to_menu(message: types.Message, state: FSMContext) -> None:
+    """
+    Обработчик кнопки возврата в меню. Очищает состояние FSM и возвращает пользователя в главное меню.
+    """
+    await state.clear()  # Обнуляем состояние
+    logging.info(f"User {message.from_user.id} returned to main menu.")
+    await message.answer("Возвращаюсь в главное меню...", reply_markup=main_menu)

@@ -56,12 +56,3 @@ async def manage_lecture_callback(call: types.CallbackQuery) -> None:
         await call.message.edit_text(f"🔄 Лекция *'{lecture_name}'* отменена.", parse_mode="Markdown")
 
     await call.answer("✅ Действие выполнено!")
-
-@router.message(lambda message: message.text == "🔙 Возврат в меню")
-async def return_to_menu(message: types.Message) -> None:
-    """
-    Возвращение пользователя в главное меню.
-    """
-    logging.info(f"User {message.from_user.id} returned to main menu.")
-    # Здесь можно импортировать главное меню из config или другого модуля
-    await message.answer("Возвращаюсь в главное меню...")
