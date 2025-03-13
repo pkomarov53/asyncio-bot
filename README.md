@@ -13,7 +13,7 @@
 ## Установка и запуск
 ### 1. Клонирование репозитория
 ```sh
-git clone https://github.com/asyncio-content/telegram-bot.git
+git clone https://github.com/pkomarov53/asyncio-content.git
 cd telegram-bot
 ```
 
