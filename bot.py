@@ -13,7 +13,7 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-TOKEN = "7849972969:AAGHgHQTVfdOo_FRFoc9BLhveSdxjwNyNFA"
+TOKEN = ""
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
