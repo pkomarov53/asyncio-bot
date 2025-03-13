@@ -13,8 +13,8 @@
 ## Установка и запуск
 ### 1. Клонирование репозитория
 ```sh
-git clone https://github.com/pkomarov53/asyncio-content.git
-cd asyncio-content
+git clone https://github.com/pkomarov53/asyncio-bot.git
+cd asyncio-bot
 ```
 
 ### 2. Установка зависимостей
