@@ -11,7 +11,6 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Замените YOUR_TOKEN_HERE на ваш актуальный токен
 TOKEN = ""
 
 bot = Bot(token=TOKEN)
