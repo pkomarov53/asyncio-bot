@@ -11,7 +11,7 @@ from aiogram.filters import Command
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-TOKEN = ""
+TOKEN = "7849972969:AAGHgHQTVfdOo_FRFoc9BLhveSdxjwNyNFA"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -186,10 +186,10 @@ async def show_lectures(message: types.Message, state: FSMContext) -> None:
         lecture_list = ""
         for i, lecture in enumerate(lectures):
             status = "🔴" if lecture in booked_lectures else "🟢"
-            lecture_list += f"{status} {i + 1}. {lecture}\n"
+            lecture_list += f"{status} {i + 1}. {lecture}\n\n"
 
         await message.answer(
-            f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}\nВведите номер лекции, чтобы забронировать.",
+            f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}Введите номер лекции, чтобы забронировать.",
             parse_mode="Markdown"
         )
         await state.set_state(BookingState.waiting_for_lecture)
