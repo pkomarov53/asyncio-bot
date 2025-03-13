@@ -14,7 +14,7 @@
 ### 1. Клонирование репозитория
 ```sh
 git clone https://github.com/pkomarov53/asyncio-content.git
-cd telegram-bot
+cd asyncio-content
 ```
 
 ### 2. Установка зависимостей
