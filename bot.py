@@ -1,20 +1,40 @@
 import asyncio
 import os
 import logging
+from pathlib import Path
+from functools import lru_cache
+
 import aiosqlite
 import aiofiles
 from aiogram import Bot, Dispatcher, types, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, FSInputFile,
-                           InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery)
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    CallbackQuery,
+)
 from aiogram.filters import Command
 
-# Настройка логирования
+# Настройка логгера
+logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Загрузка токена из переменных окружения
 TOKEN = ""
 
+# Константы для путей
+BASE_DIR = Path(__file__).parent
+DB_DIR = BASE_DIR / "db"
+DB_PATH = DB_DIR / "bot_database.db"
+BOOKS_DIR = BASE_DIR / "books"
+USEFUL_INFO_DIR = BASE_DIR / "useful_info"
+LECTIONS_DIR = BASE_DIR / "lections"
+
+# Инициализация бота, диспетчера и роутера
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -31,8 +51,8 @@ async def init_db() -> None:
     """
     Инициализация базы данных с созданием необходимых таблиц.
     """
-    os.makedirs("db", exist_ok=True)
-    async with aiosqlite.connect("db/bot_database.db") as conn:
+    DB_DIR.mkdir(exist_ok=True)
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,28 +70,30 @@ async def init_db() -> None:
             )
         """)
         await conn.commit()
-    logging.info("Database initialized successfully.")
+    logger.info("Database initialized successfully.")
 
 
-def get_file_base_names(folder: str, extensions: tuple) -> list:
+@lru_cache(maxsize=None)
+def get_file_base_names(folder: Path, extensions: tuple) -> list:
     """
     Возвращает список имён файлов (без расширений) из указанной папки.
+    Используется кэширование для повышения производительности.
     """
-    os.makedirs(folder, exist_ok=True)
-    return [os.path.splitext(f)[0] for f in os.listdir(folder) if f.endswith(extensions)]
+    folder.mkdir(exist_ok=True)
+    return [file.stem for file in folder.iterdir() if file.suffix in extensions]
 
 
-def get_buttons(folder: str, extensions: tuple) -> ReplyKeyboardMarkup:
+def get_buttons(folder: Path, extensions: tuple) -> ReplyKeyboardMarkup:
     """
     Возвращает клавиатуру с кнопками на основе имён файлов из указанной папки.
     """
     base_names = get_file_base_names(folder, extensions)
-    keyboard = [[KeyboardButton(text=name)] for name in base_names]
-    keyboard.append([KeyboardButton(text="🔙 Возврат в меню")])
-    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=keyboard)
+    buttons = [[KeyboardButton(text=name)] for name in base_names]
+    buttons.append([KeyboardButton(text="🔙 Возврат в меню")])
+    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=buttons)
 
 
-async def read_file_content_async(file_path: str, encoding: str = "utf-8") -> str:
+async def read_file_content_async(file_path: Path, encoding: str = "utf-8") -> str:
     """
     Асинхронно читает содержимое файла.
     """
@@ -80,7 +102,7 @@ async def read_file_content_async(file_path: str, encoding: str = "utf-8") -> st
     return content.strip()
 
 
-async def read_lines_async(file_path: str, encoding: str = "utf-8") -> list:
+async def read_lines_async(file_path: Path, encoding: str = "utf-8") -> list:
     """
     Асинхронно читает строки из файла, возвращая непустые строки.
     """
@@ -107,14 +129,17 @@ async def start(message: types.Message) -> None:
     """
     telegram_id = message.from_user.id
     nickname = message.from_user.username or message.from_user.full_name
-    logging.info(f"User @{nickname} (ID: {telegram_id}) started the bot.")
-    async with aiosqlite.connect("db/bot_database.db") as conn:
+    logger.info("User @%s (ID: %s) started the bot.", nickname, telegram_id)
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
         await conn.execute(
             "INSERT OR IGNORE INTO users (telegram_id, nickname) VALUES (?, ?)",
             (telegram_id, nickname)
         )
         await conn.commit()
-    await message.answer(f"Привет, @{nickname}! Добро пожаловать в бот контент-отдела!", reply_markup=main_menu)
+    await message.answer(
+        f"Привет, @{nickname}! Добро пожаловать в бот контент-отдела!",
+        reply_markup=main_menu
+    )
 
 
 @router.message(lambda message: message.text == "📚 Ссылки на книги")
@@ -122,20 +147,22 @@ async def book_links_menu(message: types.Message) -> None:
     """
     Вывод меню с направлениями книг.
     """
-    logging.info(f"User {message.from_user.id} accessed Book Links menu.")
-    await message.answer("Выбери направление:", reply_markup=get_buttons("books", (".txt",)))
+    logger.info("User %s accessed Book Links menu.", message.from_user.id)
+    await message.answer("Выбери направление:", reply_markup=get_buttons(BOOKS_DIR, (".txt",)))
 
 
-@router.message(lambda message: message.text in get_file_base_names("books", (".txt",)))
+@router.message(lambda message: message.text in get_file_base_names(BOOKS_DIR, (".txt",)))
 async def send_book_link(message: types.Message) -> None:
     """
     Отправка ссылки на книгу.
     """
-    book_file = os.path.join("books", f"{message.text}.txt")
-    if os.path.exists(book_file):
+    book_file = BOOKS_DIR / f"{message.text}.txt"
+    if book_file.exists():
         book_link = await read_file_content_async(book_file)
-        logging.info(f"User {message.from_user.id} requested book: {message.text}")
+        logger.info("User %s requested book: %s", message.from_user.id, message.text)
         await message.answer(f"Вот ссылка на литературу: https://{book_link}")
+    else:
+        await message.answer("❌ Книга не найдена.")
 
 
 @router.message(lambda message: message.text == "ℹ️ Полезная информация")
@@ -143,28 +170,29 @@ async def useful_info_menu(message: types.Message) -> None:
     """
     Вывод меню с полезной информацией.
     """
-    logging.info(f"User {message.from_user.id} accessed Useful Information menu.")
+    logger.info("User %s accessed Useful Information menu.", message.from_user.id)
     await message.answer(
         "Нажми на кнопку, чтобы получить полезную информацию:",
-        reply_markup=get_buttons("useful_info", (".txt", ".pdf"))
+        reply_markup=get_buttons(USEFUL_INFO_DIR, (".txt", ".pdf"))
     )
 
 
-@router.message(lambda message: message.text in get_file_base_names("useful_info", (".txt", ".pdf")))
+@router.message(lambda message: message.text in get_file_base_names(USEFUL_INFO_DIR, (".txt", ".pdf")))
 async def send_useful_info(message: types.Message) -> None:
     """
     Отправка полезной информации: текст или PDF.
     """
-    info_folder = "useful_info"
-    txt_file = os.path.join(info_folder, f"{message.text}.txt")
-    pdf_file = os.path.join(info_folder, f"{message.text}.pdf")
-    if os.path.exists(txt_file):
-        info_text = await read_file_content_async(txt_file)
-        logging.info(f"User {message.from_user.id} requested info: {message.text}")
+    info_txt = USEFUL_INFO_DIR / f"{message.text}.txt"
+    info_pdf = USEFUL_INFO_DIR / f"{message.text}.pdf"
+    if info_txt.exists():
+        info_text = await read_file_content_async(info_txt)
+        logger.info("User %s requested info: %s", message.from_user.id, message.text)
         await message.answer(info_text)
-    elif os.path.exists(pdf_file):
-        logging.info(f"User {message.from_user.id} requested PDF: {message.text}")
-        await message.answer_document(FSInputFile(pdf_file))
+    elif info_pdf.exists():
+        logger.info("User %s requested PDF: %s", message.from_user.id, message.text)
+        await message.answer_document(FSInputFile(str(info_pdf)))
+    else:
+        await message.answer("❌ Информация не найдена.")
 
 
 @router.message(lambda message: message.text == "📅 Доступные лекции")
@@ -172,35 +200,33 @@ async def available_lectures_menu(message: types.Message, state: FSMContext) -> 
     """
     Вывод меню с направлениями лекций.
     """
-    logging.info(f"User {message.from_user.id} accessed Available Lectures menu.")
-    await message.answer("Выбери направление лекций:", reply_markup=get_buttons("lections", (".txt",)))
+    logger.info("User %s accessed Available Lectures menu.", message.from_user.id)
+    await message.answer("Выбери направление лекций:", reply_markup=get_buttons(LECTIONS_DIR, (".txt",)))
     await state.set_state(BookingState.waiting_for_direction)
 
 
-@router.message(lambda message: message.text in get_file_base_names("lections", (".txt",)))
+@router.message(lambda message: message.text in get_file_base_names(LECTIONS_DIR, (".txt",)))
 async def show_lectures(message: types.Message, state: FSMContext) -> None:
     """
     Отображение списка лекций для выбранного направления с индикаторами бронирования.
     """
     direction = message.text
-    lection_file = os.path.join("lections", f"{direction}.txt")
-    logging.info(f"Opening file for direction '{direction}': {lection_file}")
-
-    if os.path.exists(lection_file):
+    lection_file = LECTIONS_DIR / f"{direction}.txt"
+    logger.info("Opening file for direction '%s': %s", direction, lection_file)
+    if lection_file.exists():
         lectures = await read_lines_async(lection_file)
-        async with aiosqlite.connect("db/bot_database.db") as conn:
+        async with aiosqlite.connect(str(DB_PATH)) as conn:
             async with conn.execute("SELECT lecture FROM bookings WHERE direction = ?", (direction,)) as cursor:
                 rows = await cursor.fetchall()
                 booked_lectures = {row[0] for row in rows}
-
         await state.update_data(direction=direction)
-        lecture_list = ""
-        for i, lecture in enumerate(lectures):
-            status = "🔴" if lecture in booked_lectures else "🟢"
-            lecture_list += f"{status} {i + 1}. {lecture}\n\n"
-
+        lecture_list = "\n\n".join(
+            f"{'🔴' if lecture in booked_lectures else '🟢'} {idx}. {lecture}"
+            for idx, lecture in enumerate(lectures, start=1)
+        )
         await message.answer(
-            f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}Введите номер лекции, чтобы забронировать.",
+            f"📖 *Доступные лекции в направлении* _{direction}_:\n\n{lecture_list}\n\n"
+            "Введите номер лекции, чтобы забронировать.",
             parse_mode="Markdown"
         )
         await state.set_state(BookingState.waiting_for_lecture)
@@ -219,8 +245,8 @@ async def book_lecture(msg: types.Message, state: FSMContext) -> None:
         await msg.answer("❌ Ошибка: не выбрано направление для бронирования.")
         return
 
-    lection_file = os.path.join("lections", f"{direction}.txt")
-    if not os.path.exists(lection_file):
+    lection_file = LECTIONS_DIR / f"{direction}.txt"
+    if not lection_file.exists():
         await msg.answer("❌ Ошибка: направление не найдено.")
         return
 
@@ -231,13 +257,16 @@ async def book_lecture(msg: types.Message, state: FSMContext) -> None:
         return
 
     selected_lecture = lectures[lecture_number - 1]
-    async with aiosqlite.connect("db/bot_database.db") as conn:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
         async with conn.execute(
-                "SELECT lecture FROM bookings WHERE direction = ? AND lecture = ?",
-                (direction, selected_lecture)
+            "SELECT lecture FROM bookings WHERE direction = ? AND lecture = ?",
+            (direction, selected_lecture)
         ) as cursor:
             if await cursor.fetchone():
-                await msg.answer(f"⚠️ Лекция *'{selected_lecture}'* уже забронирована.", parse_mode="Markdown")
+                await msg.answer(
+                    f"⚠️ Лекция *'{selected_lecture}'* уже забронирована.",
+                    parse_mode="Markdown"
+                )
                 return
 
         await conn.execute(
@@ -245,9 +274,9 @@ async def book_lecture(msg: types.Message, state: FSMContext) -> None:
             (msg.from_user.id, selected_lecture, direction)
         )
         await conn.commit()
-        logging.info(f"User {msg.from_user.id} booked lecture: {selected_lecture} ({direction})")
-        await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
-        await state.clear()
+    logger.info("User %s booked lecture: %s (%s)", msg.from_user.id, selected_lecture, direction)
+    await msg.answer(f"✅ Лекция *'{selected_lecture}'* успешно забронирована!", parse_mode="Markdown")
+    await state.clear()
 
 
 @router.message(lambda message: message.text == "📖 Мои лекции")
@@ -256,9 +285,10 @@ async def my_lectures(message: types.Message) -> None:
     Отображение списка забронированных лекций с inline-кнопками.
     """
     user_id = message.from_user.id
-    async with aiosqlite.connect("db/bot_database.db") as conn:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
         async with conn.execute(
-            "SELECT id, lecture, direction FROM bookings WHERE user_id = ?", (user_id,)
+            "SELECT id, lecture, direction FROM bookings WHERE user_id = ?",
+            (user_id,)
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -286,8 +316,11 @@ async def manage_lecture_callback(call: CallbackQuery) -> None:
     """
     user_id = call.from_user.id
     action, lecture_id = call.data.split(":", 1)
-    async with aiosqlite.connect("db/bot_database.db") as conn:
-        async with conn.execute("SELECT lecture FROM bookings WHERE id = ? AND user_id = ?", (lecture_id, user_id)) as cursor:
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        async with conn.execute(
+            "SELECT lecture FROM bookings WHERE id = ? AND user_id = ?",
+            (lecture_id, user_id)
+        ) as cursor:
             row = await cursor.fetchone()
             if not row:
                 await call.answer("⚠ Лекция не найдена.", show_alert=True)
@@ -297,9 +330,13 @@ async def manage_lecture_callback(call: CallbackQuery) -> None:
         await conn.commit()
 
     if action == "complete":
-        await call.message.edit_text(f"✅ Лекция *'{lecture_name}'* завершена!", parse_mode="Markdown")
+        await call.message.edit_text(
+            f"✅ Лекция *'{lecture_name}'* завершена!", parse_mode="Markdown"
+        )
     else:
-        await call.message.edit_text(f"🔄 Лекция *'{lecture_name}'* отменена.", parse_mode="Markdown")
+        await call.message.edit_text(
+            f"🔄 Лекция *'{lecture_name}'* отменена.", parse_mode="Markdown"
+        )
 
     await call.answer("✅ Действие выполнено!")
 
@@ -309,7 +346,7 @@ async def return_to_menu(message: types.Message) -> None:
     """
     Возвращение пользователя в главное меню.
     """
-    logging.info(f"User {message.from_user.id} returned to main menu.")
+    logger.info("User %s returned to main menu.", message.from_user.id)
     await message.answer("Возвращаюсь в главное меню...", reply_markup=main_menu)
 
 
@@ -317,7 +354,7 @@ async def main() -> None:
     """
     Основная функция запуска бота.
     """
-    logging.info("Bot is starting...")
+    logger.info("Bot is starting...")
     await init_db()
     await dp.start_polling(bot)
 
